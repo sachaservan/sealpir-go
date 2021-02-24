@@ -1,2 +1,2 @@
 # A simple wrapper around SealPIR
-# - [ ] write a better readme! 
+TODO: write a better readme! 
