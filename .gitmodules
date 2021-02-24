@@ -1,0 +1,3 @@
+[submodule "C/SealPIR"]
+	path = C/SealPIR
+	url = https://github.com/microsoft/SealPIR.git
