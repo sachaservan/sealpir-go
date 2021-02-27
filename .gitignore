@@ -4,3 +4,4 @@
 *Makefile
 *.a
 */bin/*
+*.cmake
