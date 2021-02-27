@@ -81,5 +81,4 @@ func TestFull(t *testing.T) {
 	client.Free()
 	server.Free()
 	params.Free()
-	keys.Free()
 }

@@ -28,20 +28,23 @@ struct ClientWrapper {
 };
 
 struct SerializedAnswer {
-    string str;
+    const char *str;
+    uint64_t str_len; 
     uint64_t ciphertext_size;
     uint64_t count; 
 };
 
 struct SerializedQuery {
-    string str;
+    const char *str;
+    uint64_t str_len; 
     uint64_t client_id;
     uint64_t ciphertext_size;
     uint64_t count; 
 };
 
 struct SerializedGaloisKeys {
-    string str;
+    const char *str;
+    uint64_t str_len; 
     uint64_t client_id;
 };
 #endif

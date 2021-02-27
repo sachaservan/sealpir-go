@@ -37,7 +37,8 @@ void* gen_galois_keys(void *client_wrapper) {
     SerializedGaloisKeys *ser = new SerializedGaloisKeys();
     GaloisKeys galois_keys = cw->client->generate_galois_keys();
     string ser_keys = serialize_galoiskeys(galois_keys);
-    ser->str = ser_keys;
+    ser->str = ser_keys.c_str();
+    ser->str_len = ser_keys.length();
     ser->client_id = cw->client_id;
     return ser;
 }
@@ -71,7 +72,8 @@ void* gen_query(void *client_wrapper, uint64_t desiredIndex) {
     size_test.push_back(query[0][0]);
 
     SerializedQuery *ser = new SerializedQuery();
-    ser->str = query_ser;
+    ser->str = query_ser.c_str();
+    ser->str_len = query_ser.length();
     ser->ciphertext_size = serialize_ciphertexts(size_test).size();
     ser->count = 1;
 
@@ -82,7 +84,8 @@ char* recover(void *client_wrapper, void *serialized_answer) {
     struct ClientWrapper *cw = (struct ClientWrapper *)client_wrapper;
     struct SerializedAnswer *sa = (struct SerializedAnswer *)serialized_answer;
 
-    PirReply answer = deserialize_ciphertexts(sa->count, sa->str, sa->ciphertext_size);
+    string str(sa->str, sa->str_len);
+    PirReply answer = deserialize_ciphertexts(sa->count, str, sa->ciphertext_size);
     Plaintext result = cw->client->decode_reply(answer);
     uint64_t size = ((cw->params->poly_degree * cw->params->logt) / 8);
     uint8_t* elems = new uint8_t[size]; 
@@ -103,7 +106,8 @@ void* init_server_wrapper(void *params) {
 void set_galois_keys(void *server_wrapper, void *serialized_galois_keys) {
     struct ServerWrapper *sw = (ServerWrapper *)server_wrapper;
     struct SerializedGaloisKeys *k = (struct SerializedGaloisKeys *) serialized_galois_keys;
-    GaloisKeys *galois_keys = deserialize_galoiskeys(k->str);
+    string str(k->str, k->str_len);
+    GaloisKeys *galois_keys = deserialize_galoiskeys(str);
     sw->server->set_galois_key(k->client_id, *galois_keys);
 }
 
@@ -119,10 +123,12 @@ void setup_database(void *server_wrapper, char* data) {
 void* gen_answer(void *server_wrapper, void *serialized_query) {
     struct ServerWrapper *sw = (ServerWrapper *)server_wrapper;
     struct SerializedQuery *sq = (SerializedQuery *)serialized_query;
+
+    string str(sq->str, sq->str_len);
     PirQuery query = deserialize_query(
         sw->params->d, 
         sq->count, 
-        sq->str, 
+        str, 
         sq->ciphertext_size
     );
 
@@ -133,7 +139,8 @@ void* gen_answer(void *server_wrapper, void *serialized_query) {
     size_test.push_back(res[0]);
 
     SerializedAnswer *ans = new SerializedAnswer();
-    ans->str = ser_ans;
+    ans->str = ser_ans.c_str();
+    ans->str_len = ser_ans.length();
     ans->ciphertext_size = serialize_ciphertexts(size_test).size();
     ans->count = res.size();
 
