@@ -6,13 +6,15 @@ package sealpir
 // #include "C/wrapper.h"
 import "C"
 import (
+	"sync"
 	"unsafe"
 )
 
 type Params struct {
-	Pointer   unsafe.Pointer
-	NumItems  int
-	ItemBytes int
+	Pointer      unsafe.Pointer
+	NumItems     int
+	ItemBytes    int
+	NParallelism int
 }
 
 type Client struct {
@@ -21,7 +23,8 @@ type Client struct {
 }
 
 type Server struct {
-	Pointer unsafe.Pointer
+	DBs    []unsafe.Pointer // one database per parallelism
+	Params *Params
 }
 
 type GaloisKeys struct {
@@ -71,11 +74,22 @@ type GaloisKeysCStruct struct {
 	ClientID C.ulonglong
 }
 
-func InitParams(numItems, itemBytes, polyDegree, logt, d int) *Params {
+func InitParams(numItems, itemBytes, polyDegree, logt, d, nParallelism int) *Params {
+
+	parallelDBSize := numItems / nParallelism
+	cParamsPtr := C.init_params(
+		C.ulonglong(parallelDBSize),
+		C.ulonglong(itemBytes),
+		C.ulonglong(polyDegree),
+		C.ulonglong(logt),
+		C.ulonglong(d),
+	)
+
 	return &Params{
-		NumItems:  numItems,
-		ItemBytes: itemBytes,
-		Pointer:   C.init_params(C.ulonglong(numItems), C.ulonglong(itemBytes), C.ulonglong(polyDegree), C.ulonglong(logt), C.ulonglong(d)),
+		NumItems:     numItems,
+		ItemBytes:    itemBytes,
+		NParallelism: nParallelism,
+		Pointer:      cParamsPtr,
 	}
 }
 
@@ -89,8 +103,15 @@ func InitClient(params *Params, clientId int) *Client {
 
 func InitServer(params *Params) *Server {
 
+	parallelism := params.NParallelism
+	dbs := make([]unsafe.Pointer, parallelism)
+
+	for i := 0; i < parallelism; i++ {
+		dbs[i] = C.init_server_wrapper(params.Pointer)
+	}
 	return &Server{
-		Pointer: C.init_server_wrapper(params.Pointer),
+		DBs:    dbs,
+		Params: params,
 	}
 }
 
@@ -121,11 +142,22 @@ func (server *Server) SetGaloisKeys(keys *GaloisKeys) {
 
 	keysPtr := unsafe.Pointer(&galKeysC)
 
-	C.set_galois_keys(server.Pointer, keysPtr)
+	for i := 0; i < server.Params.NParallelism; i++ {
+		C.set_galois_keys(server.DBs[i], keysPtr)
+	}
 }
 
 func (server *Server) SetupDatabase(db *Database) {
-	C.setup_database(server.Pointer, C.CString(string(db.bytes)))
+
+	allData := db.bytes
+	// partsize := int(len(allData) / server.Parallelism)
+
+	// split the database into many sub-databases
+	for i := 0; i < server.Params.NParallelism; i++ {
+		// chunkBytes := allData[i*partsize : i*partsize+partsize]
+		C.setup_database(server.DBs[i], C.CString(string(allData)))
+	}
+
 }
 
 func (client *Client) GetFVIndex(elemIndex int64) int64 {
@@ -156,7 +188,7 @@ func (client *Client) GenQuery(index int64) *Query {
 	return &query
 }
 
-func (server *Server) GenAnswer(query *Query) *Answer {
+func (server *Server) GenAnswer(query *Query) []*Answer {
 
 	// convert to queryC type
 	queryC := QueryCStruct{
@@ -168,22 +200,38 @@ func (server *Server) GenAnswer(query *Query) *Answer {
 	queryC.ClientID = C.ulonglong(query.ClientID)
 
 	qPtr := unsafe.Pointer(&queryC)
-	ansPtr := C.gen_answer(server.Pointer, qPtr)
 
-	// HACK: convert SerializedAnswer struct from wrapper.h into a Answer struct
-	// see: https://stackoverflow.com/questions/28551043/golang-cast-memory-to-struct
-	size := unsafe.Sizeof(AnswerCStruct{})
-	structMem := (*(*[1<<31 - 1]byte)(ansPtr))[:size]
-	answerC := (*(*AnswerCStruct)(unsafe.Pointer(&structMem[0])))
+	answers := make([]*Answer, server.Params.NParallelism)
 
-	answer := Answer{
-		Str: C.GoStringN(answerC.StrPtr, C.int(answerC.StrLen)),
+	var wg sync.WaitGroup
+	for i := 0; i < server.Params.NParallelism; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+
+			ansPtr := C.gen_answer(server.DBs[i], qPtr)
+
+			// HACK: convert SerializedAnswer struct from wrapper.h into a Answer struct
+			// see: https://stackoverflow.com/questions/28551043/golang-cast-memory-to-struct
+			size := unsafe.Sizeof(AnswerCStruct{})
+			structMem := (*(*[1<<31 - 1]byte)(ansPtr))[:size]
+			answerC := (*(*AnswerCStruct)(unsafe.Pointer(&structMem[0])))
+
+			answer := Answer{
+				Str: C.GoStringN(answerC.StrPtr, C.int(answerC.StrLen)),
+			}
+
+			answer.CiphertextSize = uint64(answerC.CiphertextSize)
+			answer.Count = uint64(answerC.Count)
+
+			answers[i] = &answer
+		}(i)
 	}
 
-	answer.CiphertextSize = uint64(answerC.CiphertextSize)
-	answer.Count = uint64(answerC.Count)
+	wg.Wait()
 
-	return &answer
+	return answers
 }
 
 func (client *Client) Recover(answer *Answer, offset int64) []byte {
@@ -210,5 +258,7 @@ func (client *Client) Free() {
 }
 
 func (server *Server) Free() {
-	C.free_server_wrapper(server.Pointer)
+	for i := 0; i < server.Params.NParallelism; i++ {
+		C.free_server_wrapper(server.DBs[i])
+	}
 }
